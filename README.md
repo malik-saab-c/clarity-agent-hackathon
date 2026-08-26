@@ -65,3 +65,26 @@ demo/demo_clarity.mp4
 ```
 
 > The video shows the real app: TrueForge online status, live streaming response, file creation with approval, zip packaging, and the live activity trace.
+
+---
+
+## Qodo Code Review Evidence
+
+> **Requirement (Hackathon Rule 10):** Every submission must include a link to at least
+> one representative merged pull request containing meaningful hackathon code, one or two
+> sentences on what Qodo surfaced and what you changed or intentionally dismissed, and a
+> pull request history showing the completed review, your decisions, and a follow-up review
+> against the final code.
+
+**Setup done:** Qodo is configured for this repository (one admin install covers the whole
+team; Qodo is free for open source).
+
+**Review PR (add your link after review):**
+- Pull request: `#1` — https://github.com/malik-saab-c/clarity-agent-hackathon/pull/1
+- What Qodo surfaced: _(fill 1–2 sentences after your first Qodo review)_
+- What I changed / intentionally dismissed: _(fill)_
+- Follow-up review against final code: _(fill)_
+
+> Steps: sign in at https://app.qodo.ai → Integrations → GitHub → Add installation →
+> authorise this repo → open a PR → Qodo reviews automatically. If it doesn't, comment
+> `@qodo-ai review` on the PR.
