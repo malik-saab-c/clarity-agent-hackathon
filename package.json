@@ -1,0 +1,21 @@
+{
+  "name": "agentforge-hackathon",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Clarity — a calm, approval-first AI agent workspace for the Agent Harness Hackathon",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "dev": "node --watch server.js",
+    "trueforge": "node node_modules/@truefoundry/trueforge/dist/cli.js --port 8790",
+    "start-all": "node node_modules/@truefoundry/trueforge/dist/cli.js --port 8790 & sleep 4; node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@truefoundry/trueforge": "^0.1.4",
+    "@truefoundry/trueforge-sdk": "^0.1.3"
+  }
+}

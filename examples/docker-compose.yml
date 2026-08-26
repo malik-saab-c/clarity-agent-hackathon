@@ -1,0 +1,13 @@
+# Clarity — run the whole workspace (web UI + TrueForge harness) with one command:
+#   docker compose up
+services:
+  clarity:
+    build: .
+    ports: ["4173:4173"]
+    env_file: [.env]
+  trueforge:
+    image: ghcr.io/truefoundry/trueforge:latest
+    environment:
+      - AGENT_MODEL=${AGENT_MODEL:-gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    ports: ["8000:8000"]
