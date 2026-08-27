@@ -86,4 +86,4 @@ team; Qodo is free for open source).
 - What Qodo surfaced: Qodo reported no material bugs, rule violations, or requirement gaps.
 - What I changed / dismissed: No changes were required from this review because the report found no material issues.
 - Evidence screenshot: [`docs/evidence/qodo-pr-1-merged.png`](docs/evidence/qodo-pr-1-merged.png)
-- Follow-up review against final code: open a final-code PR after the last hackathon change and add its link here.
+- Follow-up review against final code: open a final-code PR after the last hackathon change and add its link here-
