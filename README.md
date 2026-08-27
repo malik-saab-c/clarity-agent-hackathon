@@ -85,5 +85,5 @@ team; Qodo is free for open source).
 - Qodo result: **Bugs 0 · Rule violations 0 · Requirement gaps 0**
 - What Qodo surfaced: Qodo reported no material bugs, rule violations, or requirement gaps.
 - What I changed / dismissed: No changes were required from this review because the report found no material issues.
-- Evidence screenshot: [`docs/evidence/qodo-pr-1-merged.png`](docs/evidence/qodo-pr-1-merged.png)
-- Follow-up review against final code: open a final-code PR after the last hackathon change and add its link here-
+- Evidence screenshot:
+- Follow-up review against final code: **PR #2 — https://github.com/malik-saab-c/clarity-agent-hackathon/pull/2** (merged; Qodo review: Bugs 0 · Rule violations 0 · Requirement gaps 0). [`docs/evidence/qodo-pr-1-merged.png`](docs/evidence/qodo-pr-1-merged.png)
