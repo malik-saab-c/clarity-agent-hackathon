@@ -25,11 +25,11 @@ const uploadsDir = path.join(wsRoot, 'uploads');
 for (const d of [wsRoot, uploadsDir]) if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 
 const providers = {
-  openai: { name: 'OpenAI', model: 'gpt-4o-mini' },
-  groq: { name: 'Groq', model: 'openai/gpt-oss-20b' },
-  anthropic: { name: 'Claude', model: 'claude-3-5-haiku-latest' },
-  gemini: { name: 'Gemini', model: 'gemini-2.0-flash' },
-  local: { name: 'Local / Ollama', model: 'llama3.2' }
+  openai: { name: 'OpenAI', model: 'gpt-4o-mini', base: 'https://api.openai.com/v1' },
+  groq: { name: 'Groq', model: 'openai/gpt-oss-20b', base: 'https://api.groq.com/openai/v1' },
+  anthropic: { name: 'Claude', model: 'claude-3-5-haiku-latest', base: 'https://api.anthropic.com/v1' },
+  gemini: { name: 'Gemini', model: 'gemini-2.0-flash', base: 'https://generativelanguage.googleapis.com' },
+  local: { name: 'Local / Ollama', model: 'llama3.2', base: 'http://localhost:11434/v1' }
 };
 
 let pendingAction = null;          // {type, path, content, name, target}
@@ -102,6 +102,22 @@ async function checkTrueForge(force = false) {
     return tfStatus;
   })();
   try { return await tfCheckInFlight; } finally { tfCheckInFlight = null; }
+}
+
+// ---------- Provider model discovery (real API calls) ----------
+async function discoverModels(provider, key, baseUrl) {
+  if (!provider) throw Error('Provider is required');
+  if (provider === 'gemini') {
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + encodeURIComponent(key), { signal: AbortSignal.timeout(12000) });
+    const d = await r.json(); if (!r.ok) throw Error(d.error?.message || 'Gemini models request failed');
+    return (d.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent')).map(m => m.name.replace(/^models\//, ''));
+  }
+  const base = (baseUrl || providers[provider]?.base || '').replace(/\/$/, '');
+  const url = provider === 'local' ? base + '/models' : base + '/models';
+  const headers = { authorization: 'Bearer ' + key };
+  const r = await fetch(url, { headers, signal: AbortSignal.timeout(12000) });
+  const d = await r.json().catch(() => ({})); if (!r.ok) throw Error(d.error?.message || `Models request failed (HTTP ${r.status})`);
+  return (d.data || []).map(m => m.id).filter(Boolean).sort();
 }
 
 // ---------- Real workspace tools ----------
@@ -396,8 +412,10 @@ async function streamThroughTrueForge(res, b, _unused) {
       let ev; try { ev = JSON.parse(raw); } catch { continue; }
       const typ = ev.type || '';
       if (typ === 'model.message.delta') {
-        const delta = ev.delta ?? ev.reasoning_content ?? '';
-        if (delta) res.write(`data: ${JSON.stringify({ delta, event: typ })}\n\n`);
+        const delta = ev.delta ?? '';
+        const reasoning = ev.reasoning_content ?? '';
+        if (reasoning) res.write(`data: ${JSON.stringify({ reasoning_content: reasoning, event: typ })}\n\n`);
+        else if (delta) res.write(`data: ${JSON.stringify({ delta, event: typ })}\n\n`);
       } else if (typ === 'model.message') {
         const c = ev.delta ?? ev.content ?? ev.message?.content ?? '';
         const text = Array.isArray(c) ? c.map(x => x?.text || '').join('') : c;
@@ -434,6 +452,10 @@ function createApp() {
         return json(res, 200, await checkTrueForge(true));
       }
       if (req.method === 'GET' && u.pathname === '/api/providers') return json(res, 200, { providers });
+      if (req.method === 'POST' && u.pathname === '/api/providers/models') {
+        try { const b = await body(req); const models = await discoverModels(b.provider, b.apiKey, b.baseUrl); return json(res, 200, { ok: true, provider: b.provider, models }); }
+        catch (e) { return json(res, 400, { ok: false, error: e.message }); }
+      }
 
       if (req.method === 'POST' && u.pathname === '/api/approve') {
         try {

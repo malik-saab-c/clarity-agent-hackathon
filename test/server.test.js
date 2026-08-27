@@ -14,3 +14,7 @@ test('makeZip produces valid zip (PK magic + central dir)', () => {
 test('safePath blocks traversal', () => { assert.throws(() => safePath('../etc/passwd'), /Invalid|escapes/); });
 test('workspace dir exists', () => { assert.ok(fs.existsSync(wsRoot)); });
 test('uploads dir exists', () => { assert.ok(fs.existsSync(path.join(wsRoot, 'uploads'))); });
+test('provider registry includes all supported providers', () => {
+  const { providers } = require('../server.js');
+  for (const name of ['openai', 'groq', 'anthropic', 'gemini', 'local']) assert.ok(providers[name]);
+});
