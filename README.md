@@ -87,3 +87,8 @@ team; Qodo is free for open source).
 - What I changed / dismissed: No changes were required from this review because the report found no material issues.
 - Evidence screenshot:
 - Follow-up review against final code: **PR #2 — https://github.com/malik-saab-c/clarity-agent-hackathon/pull/2** (merged; Qodo review: Bugs 0 · Rule violations 0 · Requirement gaps 0). [`docs/evidence/qodo-pr-1-merged.png`](docs/evidence/qodo-pr-1-merged.png)
+
+## 📢 Published Content (Field Report + Swags tracks)
+
+- **Blog post (dev.to):** https://dev.to/malik_ibrahim_e4ab895386a/clarity-agent-harness-project-truefoundry-387e
+- **LinkedIn post:** https://www.linkedin.com/posts/malik-ibrahim-664b48430_github-malik-saab-cclarity-agent-hackathon-activity-7498696497212059648-cpLi
