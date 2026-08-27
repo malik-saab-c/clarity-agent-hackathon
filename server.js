@@ -421,10 +421,9 @@ async function streamThroughTrueForge(res, b, _unused) {
       let ev; try { ev = JSON.parse(raw); } catch { continue; }
       const typ = ev.type || '';
       if (typ === 'model.message.delta') {
-        // TrueForge/model providers use several delta fields. Reasoning must never
-        // leak into the visible assistant answer.
+        // TRUE FORGE EXACT FORMAT: reasoning_content = thinking, content = answer
         const reasoning = ev.reasoning_content ?? ev.reasoning ?? ev.thinking ?? '';
-        const content = ev.delta ?? ev.content_delta ?? ev.text ?? '';
+        const content = ev.content ?? ev.delta ?? ev.content_delta ?? ev.text ?? '';
         if (reasoning) res.write(`data: ${JSON.stringify({ reasoning_content: String(reasoning), event: typ })}\n\n`);
         if (content) res.write(`data: ${JSON.stringify({ delta: String(content), event: typ })}\n\n`);
       } else if (typ === 'model.message' || typ === 'model.message.completed' || typ === 'model.response') {
@@ -438,7 +437,19 @@ async function streamThroughTrueForge(res, b, _unused) {
         res.write(`data: ${JSON.stringify({ event: typ, tool: toolName, args })}\n\n`);
       } else if (/approval/i.test(typ)) {
         res.write(`data: ${JSON.stringify({ event: 'approval.requested', reason: ev.reason || ev.message || '' })}\n\n`);
-      } else if (typ === 'turn.done' || typ === 'turn.created') {
+      } else if (typ === 'turn.done') {
+        const output = ev.state?.output || {};
+        const finalText = output.content || ev.output?.content || '';
+        const actions = ev.state?.required_actions || ev.required_actions || [];
+        if (finalText) res.write(`data: ${JSON.stringify({ event: typ, final_text: String(finalText) })}\n\n`);
+        if (Array.isArray(actions) && actions.length) {
+          for (const act of actions) {
+            res.write(`data: ${JSON.stringify({ event: 'approval.requested', approvalId: act.id || crypto.randomUUID(), reason: (act.label || act.type || 'Action') + ': ' + JSON.stringify(act).slice(0, 200) })}\n\n`);
+          }
+        } else {
+          res.write(`data: ${JSON.stringify({ event: typ })}\n\n`);
+        }
+      } else if (typ === 'turn.created') {
         res.write(`data: ${JSON.stringify({ event: typ })}\n\n`);
       }
     }
