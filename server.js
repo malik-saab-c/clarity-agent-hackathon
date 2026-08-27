@@ -33,6 +33,7 @@ const providers = {
 };
 
 let pendingAction = null;          // {type, path, content, name, target}
+let pendingApprovalId = null;
 let tfStatus = { online: false, checked: null, reason: '' };
 let tfCheckInFlight = null;
 
@@ -183,7 +184,7 @@ async function handleTools(req, res, u) {
       const rel = String(b.path || '').replace(/^\/+/, '');
       if (!rel) throw Error('Path required');
       safePath(rel); // validate
-      pendingAction = { type: 'write', path: rel, content: String(b.content ?? '') };
+      pendingApprovalId = crypto.randomUUID(); pendingAction = { id: pendingApprovalId, type: 'write', path: rel, content: String(b.content ?? '') };
       return json(res, 200, { ok: true, needsApproval: true, plan: ['Write ' + rel, 'Confirm content', 'Save file to workspace'] });
     } catch (e) { return json(res, 400, { ok: false, error: e.message }); }
   }
@@ -192,7 +193,7 @@ async function handleTools(req, res, u) {
     try {
       const b = await body(req);
       const name = (b.name || 'workspace.zip').replace(/[^\w.\-]/g, '_');
-      pendingAction = { type: 'zip', name };
+      pendingApprovalId = crypto.randomUUID(); pendingAction = { id: pendingApprovalId, type: 'zip', name };
       return json(res, 200, { ok: true, needsApproval: true, plan: ['Package workspace files into ' + name, 'Create archive', 'Provide download link'] });
     } catch (e) { return json(res, 400, { ok: false, error: e.message }); }
   }
@@ -204,7 +205,7 @@ async function handleTools(req, res, u) {
       const target = safePath(rel);
       if (!fs.existsSync(target)) throw Error('File not found: ' + rel);
       if (target === wsRoot || target === uploadsDir) throw Error('Cannot delete workspace root');
-      pendingAction = { type: 'delete', path: rel, target };
+      pendingApprovalId = crypto.randomUUID(); pendingAction = { id: pendingApprovalId, type: 'delete', path: rel, target };
       return json(res, 200, { ok: true, needsApproval: true, plan: ['Delete ' + rel, 'Irreversible — confirm with human', 'Remove from workspace'] });
     } catch (e) { return json(res, 400, { ok: false, error: e.message }); }
   }
@@ -334,6 +335,7 @@ async function streamProviderDirect(res, b) {
 
 // ---------- TrueForge bridge (REAL events forwarded to UI) ----------
 let tfCachedAgent = null;
+const tfSessions = new Map(); // client runId -> {sessionId, agentName}
 
 async function tfJson(method, endpoint, payload, timeoutMs = 15000) {
   const opts = {
@@ -386,11 +388,18 @@ async function streamThroughTrueForge(res, b, _unused) {
   const key = b.apiKey || process.env.GROQ_API_KEY;
   if (b.provider === 'groq' && key) await ensureGroqProvider(key);
   await ensureAgent(b);
-  // session
-  const sess = await tfJson('POST', '/api/v1/sessions', { agent: { name: 'clarity' } });
-  const sessionId = sess?.data?.id || sess?.id;
-  if (!sessionId) throw Error('TrueForge created no session id');
-  res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.created', sessionId })}\n\n`);
+  // Reuse one TrueForge session for a run, so consecutive user messages have history.
+  const runId = String(b.runId || 'default').slice(0, 120);
+  let sessionId = tfSessions.get(runId)?.sessionId;
+  if (!sessionId) {
+    const sess = await tfJson('POST', '/api/v1/sessions', { agent: { name: 'clarity' } });
+    sessionId = sess?.data?.id || sess?.id;
+    if (!sessionId) throw Error('TrueForge created no session id');
+    tfSessions.set(runId, { sessionId, agentName: 'clarity' });
+    res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.created', sessionId })}\n\n`);
+  } else {
+    res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.reused', sessionId })}\n\n`);
+  }
   // turn (SSE, REAL)
   const r = await fetch(`${TRUEFORGE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns`, {
     method: 'POST',
@@ -457,10 +466,17 @@ function createApp() {
         catch (e) { return json(res, 400, { ok: false, error: e.message }); }
       }
 
+      if (req.method === 'POST' && u.pathname === '/api/reject') {
+        const reason = (await body(req).catch(() => ({}))).reason || 'Rejected by user';
+        if (!pendingAction) return json(res, 400, { ok: false, error: 'No pending approval' });
+        const rejected = pendingAction; pendingAction = null; pendingApprovalId = null;
+        return json(res, 200, { ok: true, status: 'rejected', text: `Rejected: ${rejected.type} action was not executed.`, reason });
+      }
+
       if (req.method === 'POST' && u.pathname === '/api/approve') {
         try {
           if (!pendingAction) return json(res, 400, { ok: false, error: 'No pending action to approve' });
-          const a = pendingAction; pendingAction = null;
+          const a = pendingAction; pendingAction = null; pendingApprovalId = null;
           const result = await executeApproval(a);
           return json(res, 200, result);
         } catch (e) { return json(res, 400, { ok: false, error: e.message }); }
