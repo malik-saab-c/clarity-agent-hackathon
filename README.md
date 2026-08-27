@@ -88,4 +88,4 @@ team; Qodo is free for open source).
 > Steps: sign in at https://app.qodo.ai → Integrations → GitHub → Add installation →
 > authorise this repo → open a PR → Qodo reviews automatically. If it doesn't, comment
 > `@qodo-ai review` on the PR.
-> Tested Qodo review.
+> Tested Qodo review..
