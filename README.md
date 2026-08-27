@@ -79,13 +79,11 @@ demo/demo_clarity.mp4
 **Setup done:** Qodo is configured for this repository (one admin install covers the whole
 team; Qodo is free for open source).
 
-**Review PR (add your link after review):**
-- Pull request: `#1` — https://github.com/malik-saab-c/clarity-agent-hackathon/pull/1
-- What Qodo surfaced: _(fill 1–2 sentences after your first Qodo review)_
-- What I changed / intentionally dismissed: _(fill)_
-- Follow-up review against final code: _(fill)_
-
-> Steps: sign in at https://app.qodo.ai → Integrations → GitHub → Add installation →
-> authorise this repo → open a PR → Qodo reviews automatically. If it doesn't, comment
-> `@qodo-ai review` on the PR.
-> Tested Qodo review..
+**Review PR (completed and merged):**
+- Pull request #1 — https://github.com/malik-saab-c/clarity-agent-hackathon/pull/1
+- Status: **Merged** (Qodo review is visible in the PR conversation)
+- Qodo result: **Bugs 0 · Rule violations 0 · Requirement gaps 0**
+- What Qodo surfaced: Qodo reported no material bugs, rule violations, or requirement gaps.
+- What I changed / dismissed: No changes were required from this review because the report found no material issues.
+- Evidence screenshot: [`docs/evidence/qodo-pr-1-merged.png`](docs/evidence/qodo-pr-1-merged.png)
+- Follow-up review against final code: open a final-code PR after the last hackathon change and add its link here.
