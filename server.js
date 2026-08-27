@@ -421,16 +421,21 @@ async function streamThroughTrueForge(res, b, _unused) {
       let ev; try { ev = JSON.parse(raw); } catch { continue; }
       const typ = ev.type || '';
       if (typ === 'model.message.delta') {
-        const delta = ev.delta ?? '';
-        const reasoning = ev.reasoning_content ?? '';
-        if (reasoning) res.write(`data: ${JSON.stringify({ reasoning_content: reasoning, event: typ })}\n\n`);
-        else if (delta) res.write(`data: ${JSON.stringify({ delta, event: typ })}\n\n`);
-      } else if (typ === 'model.message') {
-        const c = ev.delta ?? ev.content ?? ev.message?.content ?? '';
-        const text = Array.isArray(c) ? c.map(x => x?.text || '').join('') : c;
-        if (text) res.write(`data: ${JSON.stringify({ delta: text, event: typ })}\n\n`);
+        // TrueForge/model providers use several delta fields. Reasoning must never
+        // leak into the visible assistant answer.
+        const reasoning = ev.reasoning_content ?? ev.reasoning ?? ev.thinking ?? '';
+        const content = ev.delta ?? ev.content_delta ?? ev.text ?? '';
+        if (reasoning) res.write(`data: ${JSON.stringify({ reasoning_content: String(reasoning), event: typ })}\n\n`);
+        if (content) res.write(`data: ${JSON.stringify({ delta: String(content), event: typ })}\n\n`);
+      } else if (typ === 'model.message' || typ === 'model.message.completed' || typ === 'model.response') {
+        const c = ev.output_text ?? ev.text ?? ev.content ?? ev.message?.content ?? '';
+        const text = Array.isArray(c) ? c.map(x => typeof x === 'string' ? x : (x?.text || x?.content || '')).join('') : c;
+        if (text) res.write(`data: ${JSON.stringify({ final_text: String(text), event: typ })}\n\n`);
       } else if (typ === 'tool.call') {
-        res.write(`data: ${JSON.stringify({ event: typ, tool: ev.toolName || ev.name || 'tool', args: ev.args || ev.input || {} })}\n\n`);
+        const toolName = ev.toolName || ev.name || 'tool';
+        const args = ev.args || ev.input || {};
+        res.write(`data: ${JSON.stringify({ event: 'tool.intent', tool: toolName, message: `I am about to use ${toolName} to continue your task.`, args })}\n\n`);
+        res.write(`data: ${JSON.stringify({ event: typ, tool: toolName, args })}\n\n`);
       } else if (/approval/i.test(typ)) {
         res.write(`data: ${JSON.stringify({ event: 'approval.requested', reason: ev.reason || ev.message || '' })}\n\n`);
       } else if (typ === 'turn.done' || typ === 'turn.created') {
