@@ -1,12 +1,30 @@
 # Clarity — Agent Harness Hackathon Submission (v3)
 **100% REAL TrueForge integration — verified working end-to-end:**
 Clarity UI → TrueForge (localhost:8790) → Groq (openai/gpt-oss-20b) live SSE streaming.
-## Run (2 commands)
-```bash
-npm install
-npm run start-all    # starts TrueForge (8790) + Clarity (4173)
+## 🚀 Quick Start (Terminal / PC)
 
-```
+> **Note on names:** When you download this repository from GitHub (Code ▾ → **Download ZIP**),
+> the file is named `clarity-agent-hackathon-main.zip` and it extracts into the folder
+> `clarity-agent-hackathon-main/`. (If you downloaded an older shared bundle instead, its
+> file/folder names may differ — adjust the two commands below accordingly.)
+
+1. Extract the downloaded repository:
+   ```bash
+   unzip clarity-agent-hackathon-main.zip
+   ```
+2. Enter the project folder:
+   ```bash
+   cd clarity-agent-hackathon-main
+   ```
+3. Install dependencies:
+   ```bash
+   npm install
+   ```
+4. Start everything (TrueForge on :8790 + Clarity UI on :4173):
+   ```bash
+   npm run start-all
+   ```
+
 Open http://localhost:4173 — status badge shows **TrueForge online**.
 Then paste your Groq key in Model connection and chat. Every reply streams live
 from TrueForge (model.message.delta events) — nothing is simulated.
@@ -35,16 +53,39 @@ Groq (gpt-oss-20b), OpenAI, Claude, Gemini, Local/Ollama — selectable in UI.
  * npm test → 6/6 unit tests
  * Playwright UI (desktop + mobile): TrueForge online badge, real streamed reply,
    TrueForge activity trace, 0 JS errors.
-## Termux (Android, 3GB RAM)
-```bash
-pkg install -y nodejs-lts git unzip termux-setup-storage
-cd ~/storage/downloads && unzip clarity-agent-hackathon-main.zip
-cp -r clarity-agent-hackathon-main ~/ && cd ~/clarity-agent-hackathon-main
-npm install && npm run start-all
+## 📱 Termux Setup (Android, 3GB RAM)
 
-```
-*Note: Moving the unzipped project to Termux internal storage (~/) before running npm install prevents Android filesystem symlink permission errors (EPERM).*
-Open http://localhost:4173. AI runs on Groq cloud — phone stays light.
+> **Important (Android filesystem):** Run `npm install` from **Termux internal storage
+> (`~/`)**, not from `/sdcard` or `Download`. Node packages use symlinks, and Android's
+> `/sdcard` filesystem rejects them with **EPERM / symlink errors**. The `cp` step below
+> moves the project into Termux's home directory first.
+
+1. Install Termux requirements (first time only):
+   ```bash
+   pkg update -y && pkg upgrade -y
+   pkg install -y nodejs-lts git unzip
+   termux-setup-storage
+   ```
+2. Extract the downloaded ZIP (from the Download folder):
+   ```bash
+   cd ~/storage/downloads
+   unzip clarity-agent-hackathon-main.zip
+   ```
+3. Move the project into Termux internal storage (avoids symlink/EPERM errors):
+   ```bash
+   cp -r clarity-agent-hackathon-main ~/
+   cd ~/clarity-agent-hackathon-main
+   ```
+4. Install dependencies:
+   ```bash
+   npm install
+   ```
+5. Start the application:
+   ```bash
+   npm run start-all
+   ```
+
+Open http://localhost:4173 in a browser. AI runs on Groq cloud — phone stays light.
 ## Hackathon compliance
 TrueForge central runtime ✅ · real tools ✅ · human approval ✅ · live trace ✅ ·
 file/image workspace ✅ · mobile UI ✅ · Qodo PR review (see FINAL_GUIDE.md) ✅
