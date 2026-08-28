@@ -28,13 +28,13 @@ const providers = {
   openai: { name: 'OpenAI', model: 'gpt-4o-mini', base: 'https://api.openai.com/v1' },
   groq: { name: 'Groq', model: 'openai/gpt-oss-20b', base: 'https://api.groq.com/openai/v1' },
   anthropic: { name: 'Claude', model: 'claude-3-5-haiku-latest', base: 'https://api.anthropic.com/v1' },
-  gemini: { name: 'Gemini', model: 'gemini-1.5-flash', base: 'https://generativelanguage.googleapis.com' },
+  gemini: { name: 'Gemini', model: 'gemini-3.6-flash', base: 'https://generativelanguage.googleapis.com' },
   local: { name: 'Local / Ollama', model: 'llama3.2', base: 'http://localhost:11434/v1' }
 };
 function sanitizeModelName(model) {
   if (!model) return '';
-  // strip 'models/' prefix (Gemini) and any 'provider/' prefix
-  return String(model).replace(/^models\//, '').replace(/^[a-z0-9-]+\//, '');
+  // Only strip Gemini's 'models/' prefix — keep provider/ prefixes (Groq model IDs like openai/gpt-oss-20b need them)
+  return String(model).replace(/^models\//, '');
 }
 
 let pendingAction = null;          // {type, path, content, name, target}
@@ -108,6 +108,25 @@ async function checkTrueForge(force = false) {
     return tfStatus;
   })();
   try { return await tfCheckInFlight; } finally { tfCheckInFlight = null; }
+}
+
+
+// Gemini model availability varies by key/account; try candidates in order.
+const GEMINI_FALLBACKS = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-1.5-flash', 'gemini-flash-latest'];
+async function resolveGeminiModel(key, preferred) {
+  const candidates = [];
+  if (preferred && sanitizeModelName(preferred)) candidates.push(sanitizeModelName(preferred));
+  for (const m of GEMINI_FALLBACKS) if (!candidates.includes(m)) candidates.push(m);
+  for (const m of candidates) {
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(key)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: 'hi' }] }] }), signal: AbortSignal.timeout(15000)
+      });
+      if (r.ok) return m;
+    } catch { /* try next */ }
+  }
+  throw Error('No Gemini model available on this key. Try OpenAI or Groq.');
 }
 
 // ---------- Provider model discovery (real API calls) ----------
@@ -315,7 +334,7 @@ async function streamProviderDirect(res, b) {
     const text = d.content?.map(x => x.text || '').join('') || '';
     for (const c of text.split(' ')) { res.write(`data: ${JSON.stringify({ delta: c + ' ' })}\n\n`); await new Promise(r2 => setTimeout(r2, 25)); }
   } else if (provider === 'gemini') {
-    const gemModel = sanitizeModelName(model || providers.gemini.model);
+    const gemModel = await resolveGeminiModel(key, model || providers.gemini.model);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${gemModel}:generateContent?key=${encodeURIComponent(key)}`;
     const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: b.message }] }] }) });
     const d = await r.json(); if (!r.ok) throw Error(d.error?.message || 'Gemini request failed');
@@ -363,8 +382,10 @@ function providerManifest(provider, key, model) {
   const cleanModel = sanitizeModelName(model || providers[provider]?.model || '');
   const common = { auth: { api_key: key } };
   if (provider === 'groq') {
+    // Groq model IDs include provider prefix (openai/gpt-oss-20b) — pass FULL model
+    const fullModel = model || providers.groq.model;
     return { type: 'custom', name: 'groq', base_url: 'https://api.groq.com/openai/v1', ...common,
-      models: [{ model_id: cleanModel, name: cleanModel.replace(/^.*\//, ''), properties: {} }] };
+      models: [{ model_id: fullModel, name: fullModel.replace(/^.*\//, ''), properties: {} }] };
   }
   if (provider === 'openai') {
     return { type: 'openai', base_url: 'https://api.openai.com/v1', ...common,
@@ -375,8 +396,8 @@ function providerManifest(provider, key, model) {
       models: [{ model_id: cleanModel, name: cleanModel, properties: {} }] };
   }
   if (provider === 'gemini') {
-    // TrueForge registers google-gemini as type; provider name becomes 'google-gemini'
-    return { type: 'google-gemini', base_url: 'https://generativelanguage.googleapis.com', ...common,
+    // AI SDK builds URL as {baseURL}/models/{model}:generateContent — needs /v1beta
+    return { type: 'google-gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta', ...common,
       models: [{ model_id: cleanModel, name: cleanModel, properties: {} }] };
   }
   throw Error('Unsupported provider for TrueForge: ' + provider);
@@ -388,7 +409,11 @@ async function ensureProvider(provider, key, model) {
   try {
     const list = await tfJson('GET', '/api/v1/settings/model-providers');
     const existing = (list.data || []).find(x => x.name === name);
-    if (existing) return; // already registered; keep stored key
+    if (existing) {
+      // Refresh model + key via PUT (same endpoint, server picks provider by manifest type)
+      await tfJson('PUT', '/api/v1/settings/model-providers', { manifest: providerManifest(provider, key, model) }).catch(() => {});
+      return;
+    }
     await tfJson('POST', '/api/v1/settings/model-providers', { manifest: providerManifest(provider, key, model) });
   } catch (e) { throw Error(provider + ' provider setup failed: ' + e.message); }
 }
@@ -399,18 +424,20 @@ async function ensureAgent(b) {
   const provider = b.provider === 'demo' ? 'groq' : (b.provider || 'groq');
   const model = b.model || providers[provider]?.model;
   const cleanModel = sanitizeModelName(model);
-  if (tfAgents[provider]) return tfAgents[provider];
-  const agentName = provider === 'gemini' ? 'clarity-google-gemini' : 'clarity-' + provider;
+  const tfProviderName = provider === 'gemini' ? 'google-gemini' : provider;
+  const shortModel = cleanModel.replace(/^.*\//, '').replace(/[^a-zA-Z0-9.-]/g, '-');
+  const agentName = `clarity-${tfProviderName}-${shortModel}`;
+  const fqn = `${tfProviderName}/${shortModel}`;
+  // Agent is keyed by provider+model so a model change always gets a correct agent
+  if (tfAgents[agentName]) return tfAgents[agentName];
   try {
     const list = await tfJson('GET', '/api/v1/agents');
     const found = (list.data || []).find(a => a.name === agentName);
-    if (found) { tfAgents[provider] = found; return found; }
+    if (found) { tfAgents[agentName] = found; return found; }
   } catch {}
-  const tfProviderName = provider === 'gemini' ? 'google-gemini' : provider;
-  const fqn = `${tfProviderName}/${cleanModel.replace(/^.*\//, '')}`;
   const created = await tfJson('POST', '/api/v1/agents', { manifest: { model: { name: fqn } }, name: agentName });
-  tfAgents[provider] = created.data || created;
-  return tfAgents[provider];
+  tfAgents[agentName] = created.data || created;
+  return tfAgents[agentName];
 }
 
 async function streamThroughTrueForge(res, b, _unused) {
@@ -420,29 +447,40 @@ async function streamThroughTrueForge(res, b, _unused) {
   await ensureProvider(provider, key, b.model);
   const agent = await ensureAgent(b);
   const agentName = agent?.name || 'clarity-' + provider;
-  // Fresh session per turn avoids the Groq reasoning_content history bug (400 unsupported).
-  // Conversation history is kept client-side and injected into the prompt instead.
-  const sess = await tfJson('POST', '/api/v1/sessions', { agent: { name: agentName } });
-  const sessionId = sess?.data?.id || sess?.id;
-  if (!sessionId) throw Error('TrueForge created no session id');
-  res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.created', sessionId })}\n\n`);
-  // Build prompt with prior conversation history (client sends history array)
-  const history = Array.isArray(b.history) ? b.history : [];
+  // Strategy per provider:
+  //  - groq: fresh session + client history in prompt (avoids Groq's reasoning_content 400 bug)
+  //  - gemini/anthropic/openai: REUSE TrueForge session so TrueForge builds structured history
+  const runKey = String(b.runId || 'default').slice(0, 100) + ':' + provider;
+  let sessionId = tfSessions.get(runKey)?.sessionId;
   let prompt = b.message || '';
-  if (history.length) {
-    const histText = history.map(h => `${h.role === 'user' ? 'User' : 'Assistant'}: ${String(h.content).slice(0, 2000)}`).join('\n');
-    prompt = `Previous conversation:\n${histText}\n\nUser: ${b.message}`;
+  if (provider === 'groq') {
+    sessionId = null; // force fresh
+    const history = Array.isArray(b.history) ? b.history : [];
+    if (history.length) {
+      const histText = history.map(h => `${h.role === 'user' ? 'User' : 'Assistant'}: ${String(h.content).slice(0, 2000)}`).join('\n');
+      prompt = `Previous conversation:\n${histText}\n\nUser: ${b.message}`;
+    }
+  }
+  if (!sessionId) {
+    const sess = await tfJson('POST', '/api/v1/sessions', { agent: { name: agentName } });
+    sessionId = sess?.data?.id || sess?.id;
+    if (!sessionId) throw Error('TrueForge created no session id');
+    tfSessions.set(runKey, { sessionId, agentName });
+    res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.created', sessionId })}\n\n`);
+  } else {
+    res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.reused', sessionId })}\n\n`);
   }
   // turn (SSE, REAL)
   const r = await fetch(`${TRUEFORGE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'accept': 'text/event-stream' },
-    body: JSON.stringify({ input: [{ type: 'user.message', content: prompt }], previous_turn_id: 'none' }),
+    body: JSON.stringify({ input: [{ type: 'user.message', content: prompt }], ...(provider === 'groq' ? { previous_turn_id: 'none' } : {}) }),
     signal: AbortSignal.timeout(120000)
   });
   if (!r.ok || !r.body) throw Error(`TrueForge turn HTTP ${r.status}`);
   const reader = r.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
   let sawReasoningBug = false;
+  let rawErrorText = '';
   while (true) {
     const { done, value } = await reader.read(); if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -454,9 +492,10 @@ async function streamThroughTrueForge(res, b, _unused) {
       if (!raw || raw === '[DONE]') continue;
       let ev; try { ev = JSON.parse(raw); } catch { continue; }
       const typ = ev.type || '';
-      if (typ === 'turn.done' && ev.state?.status === 'error' && /reasoning_content/.test(ev.state?.message || '')) {
-        sawReasoningBug = true;
-        break;
+      if (typ === 'turn.done' && ev.state?.status === 'error') {
+        rawErrorText = ev.state?.message || '';
+        if (/reasoning_content/.test(rawErrorText)) { sawReasoningBug = true; break; }
+        if (/503|429|high demand|rate limit/i.test(rawErrorText)) break;
       }
       if (typ === 'model.message.delta') {
         // TRUE FORGE EXACT FORMAT: reasoning_content = thinking, content = answer
@@ -496,6 +535,54 @@ async function streamThroughTrueForge(res, b, _unused) {
 
       }
     }
+  }
+  // Auto-retry on transient provider errors (503 high demand, 429 rate limit, 404 model)
+  if (!sawReasoningBug && /503|429|high demand|rate limit|not found/i.test(rawErrorText)) {
+    let retried = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const s3 = await tfJson('POST', '/api/v1/sessions', { agent: { name: agentName } });
+      const sid3 = s3?.data?.id || s3?.id;
+      if (!sid3) break;
+      const r3 = await fetch(`${TRUEFORGE_URL}/api/v1/sessions/${encodeURIComponent(sid3)}/turns`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'accept': 'text/event-stream' },
+        body: JSON.stringify({ input: [{ type: 'user.message', content: b.message || '' }], previous_turn_id: 'none' }),
+        signal: AbortSignal.timeout(120000)
+      });
+      if (!r3.ok || !r3.body) break;
+      const rd3 = r3.body.getReader(); const dec3 = new TextDecoder(); let buf3 = '';
+      let succeeded = false;
+      while (true) {
+        const { done, value } = await rd3.read(); if (done) break;
+        buf3 += dec3.decode(value, { stream: true });
+        const lines3 = buf3.split('\n'); buf3 = lines3.pop();
+        for (const line of lines3) {
+          const t3 = line.trim(); if (!t3.startsWith('data:')) continue;
+          const raw3 = t3.slice(5).trim(); if (!raw3 || raw3 === '[DONE]') continue;
+          let ev3; try { ev3 = JSON.parse(raw3); } catch { continue; }
+          const typ3 = ev3.type || '';
+          if (typ3 === 'model.message.delta') {
+            const rzn = ev3.reasoning_content ?? ''; const ctt = ev3.content ?? ev3.delta ?? '';
+            if (rzn) res.write(`data: ${JSON.stringify({ reasoning_content: String(rzn), event: typ3 })}\n\n`);
+            if (ctt) res.write(`data: ${JSON.stringify({ delta: String(ctt), event: typ3 })}\n\n`);
+          } else if (typ3 === 'turn.done') {
+            const out = ev3.state?.output || {};
+            if (ev3.state?.status === 'error') { res.write(`data: ${JSON.stringify({ error: ev3.state.message || 'retry failed' })}\n\n`); succeeded = false; break; }
+            else if (out.content) { res.write(`data: ${JSON.stringify({ event: typ3, final_text: String(out.content) })}\n\n`); succeeded = true; }
+            else res.write(`data: ${JSON.stringify({ event: typ3 })}\n\n`);
+          } else if (typ3 === 'model.message') {
+            const c3 = ev3.content ?? ev3.message?.content ?? '';
+            const tx3 = Array.isArray(c3) ? c3.map(x => typeof x === 'string' ? x : (x?.text || '')).join('') : c3;
+            if (tx3) res.write(`data: ${JSON.stringify({ delta: String(tx3), event: typ3 })}\n\n`);
+          } else if (/approval/i.test(typ3)) {
+            res.write(`data: ${JSON.stringify({ event: 'approval.requested', reason: ev3.reason || ev3.message || '' })}\n\n`);
+          } else if (typ3 === 'turn.created') { res.write(`data: ${JSON.stringify({ event: typ3 })}\n\n`); }
+        }
+        if (succeeded) break;
+      }
+      if (succeeded) { retried = true; break; }
+    }
+    if (!retried) res.write(`data: ${JSON.stringify({ error: 'Provider still busy after retries. Try another model.' })}\n\n`);
+    return;
   }
   // Auto-retry once if the Groq reasoning_content 400 bug is detected
   if (sawReasoningBug) {
