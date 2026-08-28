@@ -28,7 +28,7 @@ const providers = {
   openai: { name: 'OpenAI', model: 'gpt-4o-mini', base: 'https://api.openai.com/v1' },
   groq: { name: 'Groq', model: 'openai/gpt-oss-20b', base: 'https://api.groq.com/openai/v1' },
   anthropic: { name: 'Claude', model: 'claude-3-5-haiku-latest', base: 'https://api.anthropic.com/v1' },
-  gemini: { name: 'Gemini', model: 'gemini-3.6-flash', base: 'https://generativelanguage.googleapis.com' },
+  gemini: { name: 'Gemini', model: 'gemini-3.1-flash-lite', base: 'https://generativelanguage.googleapis.com' },
   local: { name: 'Local / Ollama', model: 'llama3.2', base: 'http://localhost:11434/v1' }
 };
 function sanitizeModelName(model) {
@@ -112,7 +112,7 @@ async function checkTrueForge(force = false) {
 
 
 // Gemini model availability varies by key/account; try candidates in order.
-const GEMINI_FALLBACKS = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-1.5-flash', 'gemini-flash-latest'];
+const GEMINI_FALLBACKS = ['gemini-3.1-flash-lite', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-latest'];
 async function resolveGeminiModel(key, preferred) {
   const candidates = [];
   if (preferred && sanitizeModelName(preferred)) candidates.push(sanitizeModelName(preferred));
