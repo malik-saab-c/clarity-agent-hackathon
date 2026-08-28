@@ -420,23 +420,24 @@ async function streamThroughTrueForge(res, b, _unused) {
   await ensureProvider(provider, key, b.model);
   const agent = await ensureAgent(b);
   const agentName = agent?.name || 'clarity-' + provider;
-  // Reuse one TrueForge session per run (keeps history); sessions are per provider-agent.
-  const runId = String(b.runId || 'default').slice(0, 120) + ':' + provider;
-  let sessionId = tfSessions.get(runId)?.sessionId;
-  if (!sessionId) {
-    const sess = await tfJson('POST', '/api/v1/sessions', { agent: { name: agentName } });
-    sessionId = sess?.data?.id || sess?.id;
-    if (!sessionId) throw Error('TrueForge created no session id');
-    tfSessions.set(runId, { sessionId, agentName });
-    res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.created', sessionId })}\n\n`);
-  } else {
-    res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.reused', sessionId })}\n\n`);
+  // Fresh session per turn avoids the Groq reasoning_content history bug (400 unsupported).
+  // Conversation history is kept client-side and injected into the prompt instead.
+  const sess = await tfJson('POST', '/api/v1/sessions', { agent: { name: agentName } });
+  const sessionId = sess?.data?.id || sess?.id;
+  if (!sessionId) throw Error('TrueForge created no session id');
+  res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.created', sessionId })}\n\n`);
+  // Build prompt with prior conversation history (client sends history array)
+  const history = Array.isArray(b.history) ? b.history : [];
+  let prompt = b.message || '';
+  if (history.length) {
+    const histText = history.map(h => `${h.role === 'user' ? 'User' : 'Assistant'}: ${String(h.content).slice(0, 2000)}`).join('\n');
+    prompt = `Previous conversation:\n${histText}\n\nUser: ${b.message}`;
   }
   // turn (SSE, REAL)
   const r = await fetch(`${TRUEFORGE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'accept': 'text/event-stream' },
-    body: JSON.stringify({ input: [{ type: 'user.message', content: b.message }] }),
+    body: JSON.stringify({ input: [{ type: 'user.message', content: prompt }] }),
     signal: AbortSignal.timeout(120000)
   });
   if (!r.ok || !r.body) throw Error(`TrueForge turn HTTP ${r.status}`);
@@ -470,6 +471,10 @@ async function streamThroughTrueForge(res, b, _unused) {
       } else if (/approval/i.test(typ)) {
         res.write(`data: ${JSON.stringify({ event: 'approval.requested', reason: ev.reason || ev.message || '' })}\n\n`);
       } else if (typ === 'turn.done') {
+        if (ev.state?.status === 'error' || ev.state?.message) {
+          res.write(`data: ${JSON.stringify({ error: ev.state.message || 'TrueForge turn failed' })}\n\n`);
+          continue;
+        }
         const output = ev.state?.output || {};
         const finalText = output.content || ev.output?.content || '';
         const actions = ev.state?.required_actions || ev.required_actions || [];
@@ -504,7 +509,14 @@ function startTrueForgeChild() {
   setTimeout(() => { tfProc.starting = false; }, 3000);
   return child;
 }
-if (process.env.CLARITY_TEST !== '1') { setInterval(() => { if (tfStatus.checked && !tfStatus.online && Date.now() - tfStatus.checked > 5000) startTrueForgeChild(); }, 10000); }
+async function ensureTrueForgeRunning() {
+  const st = await checkTrueForge(true);
+  if (!st.online) startTrueForgeChild();
+  return st;
+}
+if (process.env.CLARITY_TEST !== '1') {
+  setInterval(() => { ensureTrueForgeRunning().catch(() => {}); }, 12000);
+}
 
 // ---------- HTTP server ----------
 function createApp() {
@@ -606,7 +618,8 @@ function createApp() {
 }
 
 if (require.main === module) {
-  checkTrueForge();
+  if (process.env.CLARITY_TEST !== '1') ensureTrueForgeRunning().catch(() => {});
+  else checkTrueForge();
   createApp().listen(PORT, () => console.log(`Clarity v3 running at http://localhost:${PORT} · workspace: ${wsRoot} · trueforge: ${TRUEFORGE_URL}`));
 }
 module.exports = { createApp, providers, safeCalc, makeZip, listWorkspace, safePath, wsRoot, checkTrueForge, executeApproval };
