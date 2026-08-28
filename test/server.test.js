@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+process.env.CLARITY_TEST = '1';
 const { safeCalc, makeZip, safePath, wsRoot } = require('../server.js');
 const fs = require('fs');
 const path = require('path');

@@ -28,9 +28,14 @@ const providers = {
   openai: { name: 'OpenAI', model: 'gpt-4o-mini', base: 'https://api.openai.com/v1' },
   groq: { name: 'Groq', model: 'openai/gpt-oss-20b', base: 'https://api.groq.com/openai/v1' },
   anthropic: { name: 'Claude', model: 'claude-3-5-haiku-latest', base: 'https://api.anthropic.com/v1' },
-  gemini: { name: 'Gemini', model: 'gemini-2.0-flash', base: 'https://generativelanguage.googleapis.com' },
+  gemini: { name: 'Gemini', model: 'gemini-1.5-flash', base: 'https://generativelanguage.googleapis.com' },
   local: { name: 'Local / Ollama', model: 'llama3.2', base: 'http://localhost:11434/v1' }
 };
+function sanitizeModelName(model) {
+  if (!model) return '';
+  // strip 'models/' prefix (Gemini) and any 'provider/' prefix
+  return String(model).replace(/^models\//, '').replace(/^[a-z0-9-]+\//, '');
+}
 
 let pendingAction = null;          // {type, path, content, name, target}
 let pendingApprovalId = null;
@@ -278,7 +283,7 @@ async function executeApproval(a) {
 async function streamProviderDirect(res, b) {
   const key = b.apiKey || process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY;
   const provider = b.provider || 'groq';
-  const model = b.model || providers[provider]?.model;
+  const model = (b.model && sanitizeModelName(b.model)) || providers[provider]?.model;
   if (!key) throw Error('API key is required. Add it in Model connection, or start TrueForge.');
   const system = 'You are Clarity, an approval-first AI agent. Be concise and useful. Never perform irreversible actions without explicit user approval. When a tool is needed, explain the plan and request approval.';
   if (provider === 'groq' || provider === 'openai') {
@@ -310,7 +315,8 @@ async function streamProviderDirect(res, b) {
     const text = d.content?.map(x => x.text || '').join('') || '';
     for (const c of text.split(' ')) { res.write(`data: ${JSON.stringify({ delta: c + ' ' })}\n\n`); await new Promise(r2 => setTimeout(r2, 25)); }
   } else if (provider === 'gemini') {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model || providers.gemini.model}:generateContent?key=${encodeURIComponent(key)}`;
+    const gemModel = sanitizeModelName(model || providers.gemini.model);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${gemModel}:generateContent?key=${encodeURIComponent(key)}`;
     const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: b.message }] }] }) });
     const d = await r.json(); if (!r.ok) throw Error(d.error?.message || 'Gemini request failed');
     const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -352,50 +358,76 @@ async function tfJson(method, endpoint, payload, timeoutMs = 15000) {
   return data;
 }
 
-async function ensureGroqProvider(key) {
-  try {
-    const list = await tfJson('GET', '/api/v1/settings/model-providers');
-    const existing = (list.data || []).some(x => x.name === 'groq');
-    if (existing) return;
-    await tfJson('POST', '/api/v1/settings/model-providers', {
-      manifest: {
-        type: 'custom', name: 'groq', base_url: 'https://api.groq.com/openai/v1',
-        auth: { api_key: key },
-        models: [{ model_id: 'openai/gpt-oss-20b', name: 'gpt-oss-20b', properties: {} }]
-      }
-    });
-  } catch (e) { throw Error('Groq provider setup failed: ' + e.message); }
+// ---- Generic provider registration for TrueForge (OpenAI / Groq / Claude / Gemini) ----
+function providerManifest(provider, key, model) {
+  const cleanModel = sanitizeModelName(model || providers[provider]?.model || '');
+  const common = { auth: { api_key: key } };
+  if (provider === 'groq') {
+    return { type: 'custom', name: 'groq', base_url: 'https://api.groq.com/openai/v1', ...common,
+      models: [{ model_id: cleanModel, name: cleanModel.replace(/^.*\//, ''), properties: {} }] };
+  }
+  if (provider === 'openai') {
+    return { type: 'openai', base_url: 'https://api.openai.com/v1', ...common,
+      models: [{ model_id: cleanModel, name: cleanModel, properties: {} }] };
+  }
+  if (provider === 'anthropic') {
+    return { type: 'anthropic', base_url: 'https://api.anthropic.com/v1', ...common,
+      models: [{ model_id: cleanModel, name: cleanModel, properties: {} }] };
+  }
+  if (provider === 'gemini') {
+    // TrueForge registers google-gemini as type; provider name becomes 'google-gemini'
+    return { type: 'google-gemini', base_url: 'https://generativelanguage.googleapis.com', ...common,
+      models: [{ model_id: cleanModel, name: cleanModel, properties: {} }] };
+  }
+  throw Error('Unsupported provider for TrueForge: ' + provider);
 }
 
+async function ensureProvider(provider, key, model) {
+  if (!key) throw Error('API key is required for provider: ' + provider);
+  const name = provider === 'gemini' ? 'google-gemini' : provider;
+  try {
+    const list = await tfJson('GET', '/api/v1/settings/model-providers');
+    const existing = (list.data || []).find(x => x.name === name);
+    if (existing) return; // already registered; keep stored key
+    await tfJson('POST', '/api/v1/settings/model-providers', { manifest: providerManifest(provider, key, model) });
+  } catch (e) { throw Error(provider + ' provider setup failed: ' + e.message); }
+}
+
+const tfAgents = {}; // provider -> agent
+
 async function ensureAgent(b) {
-  if (tfCachedAgent) return tfCachedAgent;
-  const provider = b.provider === 'groq' ? 'groq' : (b.provider || 'groq');
+  const provider = b.provider === 'demo' ? 'groq' : (b.provider || 'groq');
   const model = b.model || providers[provider]?.model;
-  const fqn = `${provider}/${model.replace(/^.*\//, '')}`;
+  const cleanModel = sanitizeModelName(model);
+  if (tfAgents[provider]) return tfAgents[provider];
+  const agentName = provider === 'gemini' ? 'clarity-google-gemini' : 'clarity-' + provider;
   try {
     const list = await tfJson('GET', '/api/v1/agents');
-    const found = (list.data || []).find(a => a.name === 'clarity');
-    if (found) { tfCachedAgent = found; return found; }
+    const found = (list.data || []).find(a => a.name === agentName);
+    if (found) { tfAgents[provider] = found; return found; }
   } catch {}
-  const created = await tfJson('POST', '/api/v1/agents', {
-    manifest: { model: { name: fqn } }, name: 'clarity'
-  });
-  tfCachedAgent = created.data || created;
-  return tfCachedAgent;
+  const tfProviderName = provider === 'gemini' ? 'google-gemini' : provider;
+  const fqn = `${tfProviderName}/${cleanModel.replace(/^.*\//, '')}`;
+  const created = await tfJson('POST', '/api/v1/agents', { manifest: { model: { name: fqn } }, name: agentName });
+  tfAgents[provider] = created.data || created;
+  return tfAgents[provider];
 }
 
 async function streamThroughTrueForge(res, b, _unused) {
-  const key = b.apiKey || process.env.GROQ_API_KEY;
-  if (b.provider === 'groq' && key) await ensureGroqProvider(key);
-  await ensureAgent(b);
-  // Reuse one TrueForge session for a run, so consecutive user messages have history.
-  const runId = String(b.runId || 'default').slice(0, 120);
+  const provider = b.provider === 'demo' ? 'groq' : (b.provider || 'groq');
+  const key = b.apiKey || process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY;
+  if (!key) throw Error('API key is required for provider: ' + provider);
+  await ensureProvider(provider, key, b.model);
+  const agent = await ensureAgent(b);
+  const agentName = agent?.name || 'clarity-' + provider;
+  // Reuse one TrueForge session per run (keeps history); sessions are per provider-agent.
+  const runId = String(b.runId || 'default').slice(0, 120) + ':' + provider;
   let sessionId = tfSessions.get(runId)?.sessionId;
   if (!sessionId) {
-    const sess = await tfJson('POST', '/api/v1/sessions', { agent: { name: 'clarity' } });
+    const sess = await tfJson('POST', '/api/v1/sessions', { agent: { name: agentName } });
     sessionId = sess?.data?.id || sess?.id;
     if (!sessionId) throw Error('TrueForge created no session id');
-    tfSessions.set(runId, { sessionId, agentName: 'clarity' });
+    tfSessions.set(runId, { sessionId, agentName });
     res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.created', sessionId })}\n\n`);
   } else {
     res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'session.reused', sessionId })}\n\n`);
@@ -455,6 +487,24 @@ async function streamThroughTrueForge(res, b, _unused) {
     }
   }
 }
+
+
+// ---- TrueForge auto-restart watchdog (handles crashes honestly) ----
+const tfProc = { child: null, starting: false };
+function startTrueForgeChild() {
+  if (tfProc.child && tfProc.child.exitCode === null) return tfProc.child;
+  if (tfProc.starting) return null;
+  tfProc.starting = true;
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [path.join(__dirname, 'node_modules', '@truefoundry', 'trueforge', 'dist', 'cli.js'), '--port', '8790'], {
+    detached: true, stdio: 'ignore', env: { ...process.env, PORT: '8790' }
+  });
+  tfProc.child = child;
+  child.on('exit', () => { tfProc.starting = false; tfStatus = { online: false, checked: Date.now(), reason: 'crashed - restart scheduled' }; setTimeout(() => { tfStatus.checked = null; checkTrueForge(true); }, 2000); });
+  setTimeout(() => { tfProc.starting = false; }, 3000);
+  return child;
+}
+if (process.env.CLARITY_TEST !== '1') { setInterval(() => { if (tfStatus.checked && !tfStatus.online && Date.now() - tfStatus.checked > 5000) startTrueForgeChild(); }, 10000); }
 
 // ---------- HTTP server ----------
 function createApp() {
