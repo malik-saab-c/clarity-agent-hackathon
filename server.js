@@ -437,11 +437,12 @@ async function streamThroughTrueForge(res, b, _unused) {
   const r = await fetch(`${TRUEFORGE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}/turns`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'accept': 'text/event-stream' },
-    body: JSON.stringify({ input: [{ type: 'user.message', content: prompt }] }),
+    body: JSON.stringify({ input: [{ type: 'user.message', content: prompt }], previous_turn_id: 'none' }),
     signal: AbortSignal.timeout(120000)
   });
   if (!r.ok || !r.body) throw Error(`TrueForge turn HTTP ${r.status}`);
   const reader = r.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+  let sawReasoningBug = false;
   while (true) {
     const { done, value } = await reader.read(); if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -453,6 +454,10 @@ async function streamThroughTrueForge(res, b, _unused) {
       if (!raw || raw === '[DONE]') continue;
       let ev; try { ev = JSON.parse(raw); } catch { continue; }
       const typ = ev.type || '';
+      if (typ === 'turn.done' && ev.state?.status === 'error' && /reasoning_content/.test(ev.state?.message || '')) {
+        sawReasoningBug = true;
+        break;
+      }
       if (typ === 'model.message.delta') {
         // TRUE FORGE EXACT FORMAT: reasoning_content = thinking, content = answer
         const reasoning = ev.reasoning_content ?? ev.reasoning ?? ev.thinking ?? '';
@@ -488,6 +493,54 @@ async function streamThroughTrueForge(res, b, _unused) {
         }
       } else if (typ === 'turn.created') {
         res.write(`data: ${JSON.stringify({ event: typ })}\n\n`);
+
+      }
+    }
+  }
+  // Auto-retry once if the Groq reasoning_content 400 bug is detected
+  if (sawReasoningBug) {
+    res.write(`data: ${JSON.stringify({ mode: 'trueforge', event: 'status', message: 'Recovered from a history format issue — retrying with a clean session.' })}\n\n`);
+    const sess2 = await tfJson('POST', '/api/v1/sessions', { agent: { name: agentName } });
+    const sessionId2 = sess2?.data?.id || sess2?.id;
+    if (!sessionId2) throw Error('TrueForge retry session failed');
+    const r2 = await fetch(`${TRUEFORGE_URL}/api/v1/sessions/${encodeURIComponent(sessionId2)}/turns`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'accept': 'text/event-stream' },
+      body: JSON.stringify({ input: [{ type: 'user.message', content: b.message || '' }], previous_turn_id: 'none' }),
+      signal: AbortSignal.timeout(120000)
+    });
+    if (!r2.ok || !r2.body) throw Error(`TrueForge retry turn HTTP ${r2.status}`);
+    const rd2 = r2.body.getReader(); const dec2 = new TextDecoder(); let buf2 = '';
+    while (true) {
+      const { done, value } = await rd2.read(); if (done) break;
+      buf2 += dec2.decode(value, { stream: true });
+      const lines2 = buf2.split('\n'); buf2 = lines2.pop();
+      for (const line of lines2) {
+        const t2 = line.trim();
+        if (!t2.startsWith('data:')) continue;
+        const raw2 = t2.slice(5).trim();
+        if (!raw2 || raw2 === '[DONE]') continue;
+        let ev2; try { ev2 = JSON.parse(raw2); } catch { continue; }
+        const typ2 = ev2.type || '';
+        if (typ2 === 'model.message.delta') {
+          const rzn = ev2.reasoning_content ?? '';
+          const ctt = ev2.content ?? ev2.delta ?? '';
+          if (rzn) res.write(`data: ${JSON.stringify({ reasoning_content: String(rzn), event: typ2 })}\n\n`);
+          if (ctt) res.write(`data: ${JSON.stringify({ delta: String(ctt), event: typ2 })}\n\n`);
+        } else if (typ2 === 'turn.done') {
+          const out = ev2.state?.output || {};
+          if (ev2.state?.status === 'error') res.write(`data: ${JSON.stringify({ error: ev2.state.message || 'retry failed' })}\n\n`);
+          else if (out.content) res.write(`data: ${JSON.stringify({ event: typ2, final_text: String(out.content) })}\n\n`);
+          else res.write(`data: ${JSON.stringify({ event: typ2 })}\n\n`);
+        } else if (typ2 === 'model.message') {
+          const c2 = ev2.content ?? ev2.message?.content ?? '';
+          const text2 = Array.isArray(c2) ? c2.map(x => typeof x === 'string' ? x : (x?.text || '')).join('') : c2;
+          if (text2) res.write(`data: ${JSON.stringify({ delta: String(text2), event: typ2 })}\n\n`);
+        } else if (/approval/i.test(typ2)) {
+          res.write(`data: ${JSON.stringify({ event: 'approval.requested', reason: ev2.reason || ev2.message || '' })}\n\n`);
+        } else if (typ2 === 'turn.created') {
+          res.write(`data: ${JSON.stringify({ event: typ2 })}\n\n`);
+        }
       }
     }
   }
