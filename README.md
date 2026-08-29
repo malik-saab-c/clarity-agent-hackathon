@@ -50,7 +50,7 @@ and streams from the provider directly (badge shows "Direct"). No fake progress.
 ## Providers
 Groq (gpt-oss-20b), OpenAI, Claude, Gemini, Local/Ollama — selectable in UI.
 ## Tests (all pass)
- * npm test → 6/6 unit tests
+ * npm test → 10/10 unit tests
  * Playwright UI (desktop + mobile): TrueForge online badge, real streamed reply,
    TrueForge activity trace, 0 JS errors.
 ## 📱 Termux Setup (Android, 3GB RAM)
