@@ -25,7 +25,7 @@ Clarity UI → TrueForge (localhost:8790) → Groq (openai/gpt-oss-20b) live SSE
    npm run start-all
    ```
 
-Open http://localhost:4173 — status badge shows **TrueForge online**.
+Open http://localhost:4173 — status badge shows **TrueForge online**..
 Then paste your Groq key in Model connection and chat. Every reply streams live
 from TrueForge (model.message.delta events) — nothing is simulated.
 ## Real tools (all in data/workspace/, all approval-gated for irreversible ops)
