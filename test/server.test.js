@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 process.env.CLARITY_TEST = '1';
-const { safeCalc, makeZip, safePath, wsRoot } = require('../server.js');
+const { safeCalc, makeZip, safePath, wsRoot, createThinkFilter, registerApproval, getApproval, clearApproval, executeApproval } = require('../server.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -18,4 +18,63 @@ test('uploads dir exists', () => { assert.ok(fs.existsSync(path.join(wsRoot, 'up
 test('provider registry includes all supported providers', () => {
   const { providers } = require('../server.js');
   for (const name of ['openai', 'groq', 'anthropic', 'gemini', 'local']) assert.ok(providers[name]);
+});
+
+test('createThinkFilter cleanly parses <think> tags into reasoning and delta', () => {
+  let reasoning = '';
+  let delta = '';
+  const filter = createThinkFilter(
+    (chunk) => { reasoning += chunk; },
+    (chunk) => { delta += chunk; }
+  );
+
+  filter.push('<think>Thinking step 1... ');
+  filter.push('step 2 completed.</think>Here is ');
+  filter.push('the actual answer.');
+  filter.end();
+
+  assert.equal(reasoning, 'Thinking step 1... step 2 completed.');
+  assert.equal(delta, 'Here is the actual answer.');
+});
+
+test('registerApproval, getApproval and clearApproval manage pending actions by approvalId', () => {
+  const approval = registerApproval({
+    type: 'write',
+    path: 'sample.txt',
+    content: 'hello test',
+    reason: 'Create sample test file'
+  });
+
+  assert.ok(approval.id, 'Approval should have generated UUID');
+  const retrieved = getApproval(approval.id);
+  assert.equal(retrieved.path, 'sample.txt');
+  assert.equal(retrieved.type, 'write');
+
+  // Fallback retrieval when ID is omitted
+  const fallback = getApproval();
+  assert.equal(fallback.id, approval.id);
+
+  clearApproval(approval.id);
+  assert.equal(getApproval(approval.id), null);
+});
+
+test('executeApproval performs approved workspace file operations safely', async () => {
+  const approval = registerApproval({
+    type: 'write',
+    path: 'test-auto.txt',
+    content: 'Autonomous task execution verified',
+    reason: 'Create test-auto.txt file'
+  });
+
+  const result = await executeApproval(approval);
+  assert.equal(result.ok, true);
+  assert.ok(/wrote/i.test(result.text));
+
+  // Clean up
+  const fs = require('fs');
+  const path = require('path');
+  const filePath = path.join(wsRoot, 'test-auto.txt');
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
 });

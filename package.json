@@ -4,9 +4,11 @@
   "private": true,
   "description": "Clarity — a calm, approval-first AI agent workspace for the Agent Harness Hackathon",
   "scripts": {
+    "build": "node -e 'process.exit(0)'",
     "start": "node server.js",
     "test": "node --test",
-    "dev": "node --watch server.js",
+    "lint": "node --check server.js test/server.test.js",
+    "dev": "node server.js",
     "trueforge": "node node_modules/@truefoundry/trueforge/dist/cli.js --port 8790",
     "start-all": "node node_modules/@truefoundry/trueforge/dist/cli.js --port 8790 & sleep 4; node server.js"
   },
