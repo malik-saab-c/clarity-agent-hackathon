@@ -20,12 +20,12 @@ Clarity UI → TrueForge (localhost:8790) → Groq (openai/gpt-oss-20b) live SSE
    ```bash
    npm install
    ```
-4. Start everything (TrueForge on :8790 + Clarity UI on :4173):
+4. Start everything (TrueForge on :8790 + Clarity UI on :3000):
    ```bash
    npm run start-all
    ```
 
-Open http://localhost:4173 — status badge shows **TrueForge online**..
+Open http://localhost:3000 — status badge shows **TrueForge online**..
 Then paste your Groq key in Model connection and chat. Every reply streams live
 from TrueForge (model.message.delta events) — nothing is simulated.
 ## Real tools (all in data/workspace/, all approval-gated for irreversible ops)
@@ -85,7 +85,7 @@ Groq (gpt-oss-20b), OpenAI, Claude, Gemini, Local/Ollama — selectable in UI.
    npm run start-all
    ```
 
-Open http://localhost:4173 in a browser. AI runs on Groq cloud — phone stays light.
+Open http://localhost:3000 in a browser. AI runs on Groq cloud — phone stays light.
 ## Hackathon compliance
 TrueForge central runtime ✅ · real tools ✅ · human approval ✅ · live trace ✅ ·
 file/image workspace ✅ · mobile UI ✅ · Qodo PR review (see FINAL_GUIDE.md) ✅
